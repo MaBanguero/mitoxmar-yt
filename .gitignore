@@ -1,0 +1,25 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Secretos
+.env
+
+# Artefactos de exploracion (dumps de UI y scripts de prueba desechables)
+explore/
+*.xml
+
+# Build / dist
+build/
+dist/
+*.spec
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
