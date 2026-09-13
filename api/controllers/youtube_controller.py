@@ -365,6 +365,7 @@ async def ejecutar_views(request: dict):
         hacer_like = bool(request.get('hacer_like', False))
         hacer_comentario = bool(request.get('hacer_comentario', False))
         hacer_compartir = bool(request.get('hacer_compartir', False))
+        comentarios = request.get('comentarios') or []
 
         if not dispositivos_ids:
             raise HTTPException(status_code=400, detail="Debe seleccionar al menos un dispositivo")
@@ -385,6 +386,7 @@ async def ejecutar_views(request: dict):
                 "hacer_like": hacer_like,
                 "hacer_comentario": hacer_comentario,
                 "hacer_compartir": hacer_compartir,
+                "comentarios": comentarios,
             },
             total_esperado=len(dispositivos_ids) * len(links)
         )
@@ -400,6 +402,7 @@ async def ejecutar_views(request: dict):
             hacer_like,
             hacer_comentario,
             hacer_compartir,
+            comentarios,
             tarea_id=tarea.id
         )
 

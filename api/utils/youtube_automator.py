@@ -18,6 +18,9 @@ os.environ['ANDROID_ADB_SERVER_PORT'] = str(CUSTOM_ADB_PORT)
 # Ahora importar uiautomator2
 import uiautomator2 as u2
 
+# Tracking de acciones por cuenta/video
+from api.utils import tracking_db
+
 
 class YouTubeAutomator:
     """Clase para automatización de YouTube con uiautomator2"""
@@ -35,6 +38,12 @@ class YouTubeAutomator:
         self.cuentas_usadas: List[str] = []  # Tracking de cuentas usadas en esta sesión
         self.sin_cuentas_disponibles = False
         self.cambiar_cuentas = cambiar_cuentas
+
+        # Tracking de acciones por cuenta/video
+        self.cuenta_actual: Optional[str] = None
+        self.video_id_actual: Optional[str] = None
+        self.comentarios_asignar: List[str] = []
+        self.comentario_idx = 0
 
         # Leer número de cuentas desde variable de entorno (default: 5)
         self.cuentas_por_dispositivo = int(os.getenv('CUENTAS_POR_DISPOSITIVO', '5'))
@@ -205,6 +214,7 @@ class YouTubeAutomator:
         """
         try:
             termino = self._extraer_termino_busqueda(link_link)
+            self.video_id_actual = termino
             print(f"📱 [{self.device_id}] Abriendo via puente Chrome: {link_link} (termino: {termino})")
 
             # 1. Abrir Chrome
@@ -260,6 +270,22 @@ class YouTubeAutomator:
         if m:
             return m.group(2)
         return url
+
+    def _cuenta_tracking(self) -> str:
+        """Clave de cuenta para el tracking. Usa el nombre si se conoce, si no device+posicion."""
+        return self.cuenta_actual or f"{self.device_id}#{len(self.cuentas_usadas)}"
+
+    def _deberia_ejecutar(self, video_id: str, accion: str) -> bool:
+        """True si la accion no se ha ejecutado aun para esta cuenta y video."""
+        return not tracking_db.accion_registrada(self._cuenta_tracking(), video_id, accion)
+
+    def _registrar(self, accion: str, valor: str = None):
+        """Registra una accion en la DB de tracking para la cuenta y video actuales."""
+        if not self.video_id_actual:
+            return
+        tracking_db.registrar_accion(
+            self._cuenta_tracking(), self.device_id, self.video_id_actual, accion, valor
+        )
 
     def _abrir_chrome(self):
         """Cierra Chrome y YouTube (estado inicial) y abre Chrome desde el shell."""
@@ -795,6 +821,7 @@ class YouTubeAutomator:
                     print(f"[YT][{self.device_id}] Cambiando a la cuenta: {nombre_cuenta}")
                     if self.device.xpath(cuenta["item_xpath"]).click_exists(timeout=5):
                         self.cuentas_usadas.append(nombre_cuenta)
+                        self.cuenta_actual = nombre_cuenta
                         self.random_sleep(3, 5)
                         cuenta_seleccionada = True
                         break
@@ -1019,23 +1046,28 @@ class YouTubeAutomator:
                 self.open_youtube_link(link_post)
                 self.random_sleep(5, 8)
 
-                like_button_xpath = '//*[contains(@content-desc, "Me gusta")]'
-                if self.verificar_es_short():
-                    # COMPORTAMIENTO PARA SHORTS
-                    if self.element_exists(like_button_xpath):
-                        self.click_element(like_button_xpath)
-                        print(f"✅ [{self.device_id}] Like realizado")
+                like_button_xpath = '//*[contains(@content-desc, "Me gusta") and not(contains(@content-desc, "No me gusta"))]'
+                if self._deberia_ejecutar(self.video_id_actual or "", "like"):
+                    if self.verificar_es_short():
+                        # COMPORTAMIENTO PARA SHORTS
+                        if self.element_exists(like_button_xpath):
+                            self.click_element(like_button_xpath)
+                            self._registrar("like")
+                            print(f"✅ [{self.device_id}] Like realizado")
+                        else:
+                            print(f"❌ [{self.device_id}] Botón de like no disponible en Short")
                     else:
-                        print(f"❌ [{self.device_id}] Botón de like no disponible en Short")
+                        # COMPORTAMIENTO PARA VIDEOS NORMALES
+                        self.saltar_anuncio()
+                        self.random_sleep(2, 4)
+                        if self.element_exists(like_button_xpath):
+                            self.click_element(like_button_xpath)
+                            self._registrar("like")
+                            print(f"✅ [{self.device_id}] Like realizado")
+                        else:
+                            print(f"❌ [{self.device_id}] Botón de like no encontrado")
                 else:
-                    # COMPORTAMIENTO PARA VIDEOS NORMALES
-                    self.saltar_anuncio()
-                    self.random_sleep(2, 4)
-                    if self.element_exists(like_button_xpath):
-                        self.click_element(like_button_xpath)
-                        print(f"✅ [{self.device_id}] Like realizado")
-                    else:
-                        print(f"❌ [{self.device_id}] Botón de like no encontrado")
+                    print(f"ℹ️ [{self.device_id}] Like ya registrado para esta cuenta/video, saltando")
 
                 self.random_sleep(3, 6)
                 print(f"✅ [{self.device_id}] Proceso de likes completado")
@@ -1082,12 +1114,17 @@ class YouTubeAutomator:
                 subscribe_button_xpath_alt = '//*[contains(@content-desc, "Suscribirme")]'
                 subscribed_xpath = '//*[contains(@content-desc, "Suscrito")]'
 
-                if self.element_exists(subscribed_xpath):
+                if not self._deberia_ejecutar(self.video_id_actual or "", "suscripcion"):
+                    print(f"ℹ️ [{self.device_id}] Suscripción ya registrada para esta cuenta, saltando")
+                    suscripcion_exitosa = True
+                elif self.element_exists(subscribed_xpath):
                     print(f"ℹ️ [{self.device_id}] Ya aparece como suscrito, saltando esta cuenta")
                     suscripcion_exitosa = True
+                    self._registrar("suscripcion")
                 elif self.element_exists(subscribe_button_xpath):
                     if self.click_element(subscribe_button_xpath):
                         suscripcion_exitosa = True
+                        self._registrar("suscripcion")
                         print(f"✅ [{self.device_id}] Suscripción realizada")
                 else:
                     print(f"❌ [{self.device_id}] Botón de suscribirse no encontrado")
@@ -1239,20 +1276,36 @@ class YouTubeAutomator:
             print(f"⚠️ [{self.device_id}] Error en interaccion satisfaccion: {e}")
 
     def _like_video_actual(self) -> bool:
-        """Da like al video actual (excluye el boton 'No me gusta')."""
+        """Da like al video actual (excluye 'No me gusta'), si no se ha hecho antes."""
+        if not self._deberia_ejecutar(self.video_id_actual or "", "like"):
+            print(f"ℹ️ [{self.device_id}] Like ya registrado para esta cuenta/video, saltando")
+            return False
         like_xpath = '//*[contains(@content-desc, "Me gusta") and not(contains(@content-desc, "No me gusta"))]'
         if self.element_exists(like_xpath):
             if self.click_element(like_xpath):
+                self._registrar("like")
                 print(f"👍 [{self.device_id}] Like realizado (satisfacción)")
                 return True
         return False
 
-    def _comentar_video_actual(self) -> bool:
-        """Publica un comentario corto generico en el video actual."""
-        comentarios = [
+    def _siguiente_comentario(self) -> str:
+        """Devuelve el proximo comentario asignado (o del banco generico si no hay lista)."""
+        banco = [
             "Buen video 👍", "Muy bueno", "🔥🔥", "Excelente contenido",
             "Gracias por compartir", "👏👏", "Muy útil", "Gran video",
         ]
+        if self.comentarios_asignar:
+            c = self.comentarios_asignar[self.comentario_idx % len(self.comentarios_asignar)]
+            self.comentario_idx += 1
+            return c
+        return random.choice(banco)
+
+    def _comentar_video_actual(self) -> bool:
+        """Publica un comentario asignado en el video actual (si no se ha comentado antes)."""
+        if not self._deberia_ejecutar(self.video_id_actual or "", "comentario"):
+            print(f"ℹ️ [{self.device_id}] Comentario ya registrado para esta cuenta/video, saltando")
+            return False
+        comentario = self._siguiente_comentario()
         try:
             comment_xpath = '//*[contains(@content-desc, "Comentario") or contains(@content-desc, "comentario")]'
             if not self.element_exists(comment_xpath):
@@ -1267,10 +1320,10 @@ class YouTubeAutomator:
             input_field.click()
             self.short_sleep(1)
 
-            comentario = random.choice(comentarios)
             self.device.send_keys(comentario, clear=True)
             self.short_sleep(1)
             self.device.press("enter")
+            self._registrar("comentario", comentario)
             print(f"💬 [{self.device_id}] Comentario publicado (satisfacción): {comentario}")
             self.random_sleep(1, 2)
             self.press_back()
@@ -1280,13 +1333,17 @@ class YouTubeAutomator:
             return False
 
     def _compartir_video_actual(self) -> bool:
-        """Copia el enlace del video actual (accion de compartir)."""
+        """Copia el enlace del video actual (si no se ha compartido antes)."""
+        if not self._deberia_ejecutar(self.video_id_actual or "", "compartir"):
+            print(f"ℹ️ [{self.device_id}] Compartir ya registrado para esta cuenta/video, saltando")
+            return False
         share_xpath = '//*[contains(@content-desc, "Compartir")]'
         copy_xpath = '//*[@text="Copiar enlace"]'
         if self.element_exists(share_xpath) and self.click_element(share_xpath):
             self.random_sleep(2, 4)
             if self.element_exists(copy_xpath):
                 if self.click_element(copy_xpath):
+                    self._registrar("compartir")
                     print(f"🔗 [{self.device_id}] Enlace copiado (satisfacción)")
                     self.random_sleep(1, 2)
                     self.press_back()
@@ -1302,7 +1359,8 @@ class YouTubeAutomator:
             retention_max_pct: float = 100,
             hacer_like: bool = False,
             hacer_comentario: bool = False,
-            hacer_compartir: bool = False
+            hacer_compartir: bool = False,
+            comentarios: Optional[List[str]] = None
     ) -> int:
         """
         Proceso de views (retencion) en YouTube. La retencion varia entre
@@ -1317,6 +1375,7 @@ class YouTubeAutomator:
 
         retention_min_pct = max(5.0, float(retention_min_pct))
         retention_max_pct = min(100.0, max(retention_min_pct, float(retention_max_pct)))
+        self.comentarios_asignar = list(comentarios or [])
 
         sesiones_realizadas = 0
 
@@ -1374,6 +1433,7 @@ class YouTubeAutomator:
                     self._interaccion_satisfaccion(hacer_like, hacer_comentario, hacer_compartir, detener_flag)
 
                 sesiones_realizadas += 1
+                self._registrar("vista")
 
             except Exception as e:
                 print(f"⚠️ [{self.device_id}] Error en proceso de views: {e}")

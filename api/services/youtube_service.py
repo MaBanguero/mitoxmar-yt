@@ -775,6 +775,7 @@ class YoutubeService:
         hacer_like: bool,
         hacer_comentario: bool,
         hacer_compartir: bool,
+        comentarios: Optional[List[str]],
         tarea_id: str
     ) -> dict:
         """
@@ -798,6 +799,7 @@ class YoutubeService:
                         hacer_like,
                         hacer_comentario,
                         hacer_compartir,
+                        comentarios,
                         detener_flag,
                         tarea_id
                     )
@@ -827,6 +829,7 @@ class YoutubeService:
         hacer_like: bool,
         hacer_comentario: bool,
         hacer_compartir: bool,
+        comentarios: Optional[List[str]],
         detener_flag: threading.Event,
         tarea_id: str
     ):
@@ -844,6 +847,7 @@ class YoutubeService:
                 hacer_like,
                 hacer_comentario,
                 hacer_compartir,
+                comentarios,
                 detener_flag,
                 tarea_id
             )
@@ -863,6 +867,7 @@ class YoutubeService:
         hacer_like: bool,
         hacer_comentario: bool,
         hacer_compartir: bool,
+        comentarios: Optional[List[str]],
         detener_flag: threading.Event,
         tarea_id: str
     ):
@@ -876,7 +881,8 @@ class YoutubeService:
                 retention_max_pct=retention_max_pct,
                 hacer_like=hacer_like,
                 hacer_comentario=hacer_comentario,
-                hacer_compartir=hacer_compartir
+                hacer_compartir=hacer_compartir,
+                comentarios=comentarios
             )
             if sesiones > 0:
                 tareas_service.incrementar_completados(tarea_id, incremento=sesiones)

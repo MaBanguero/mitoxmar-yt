@@ -10,6 +10,10 @@ __pycache__/
 # Secretos
 .env
 
+# Base de datos de tracking (dato de runtime)
+tracking.db
+tracking.db-*
+
 # Artefactos de exploracion (dumps de UI y scripts de prueba desechables)
 explore/
 *.xml
