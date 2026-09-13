@@ -179,9 +179,9 @@ function StatCard({
           {icon}
         </span>
       </div>
-      <p className="mt-3 text-2xl font-bold tracking-tight text-ink">
+      <div className="mt-3 text-2xl font-bold tracking-tight text-ink">
         {loading ? <Skeleton className="h-7 w-10" /> : value}
-      </p>
+      </div>
       <p className="text-sm font-semibold text-ink-2">{label}</p>
       <p className="text-xs text-ink-3">{hint}</p>
     </Card>
