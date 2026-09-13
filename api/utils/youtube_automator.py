@@ -791,6 +791,29 @@ class YouTubeAutomator:
             else:
                 self.short_sleep(1.0)  # anuncio sin boton de saltar aun
 
+    _UMBRAL_MIDROLL_SEGUNDOS = 600  # 10 minutos: a partir de aqui se monitorean mid-rolls
+
+    def _reproducir_con_manejo_anuncios(self, watch_seconds: int, detener_flag=None, chunk: int = 10) -> int:
+        """Reproduce por watch_seconds con poll continuo de anuncios (mid-roll).
+
+        En videos largos (>10 min) los anuncios pueden aparecer a mitad del video.
+        Duerme en chunks de `chunk` segundos y en cada uno hace un solo dump para
+        detectar mid-rolls y omitirlos con saltar_anuncio(). Devuelve el tiempo real
+        reproducido (puede ser < watch_seconds si se pidio detener).
+        """
+        elapsed = 0
+        while elapsed < watch_seconds:
+            if detener_flag and detener_flag.is_set():
+                break
+            step = min(chunk, watch_seconds - elapsed)
+            time.sleep(step)
+            elapsed += step
+            estado = self._estado_reproduccion()
+            if estado['hay_anuncio']:
+                print(f"📢 [{self.device_id}] Anuncio mid-roll detectado (~{elapsed}s), omitiendo...")
+                self.saltar_anuncio()
+        return elapsed
+
     def verificar_es_short(self) -> bool:
         header_text = self.get_element_text(xpath=None,
                                             resource_id='com.google.android.youtube:id/contextual_header_title')
@@ -1086,7 +1109,10 @@ class YouTubeAutomator:
 
                 print(f"▶️ [{self.device_id}] Viendo '{termino}' por {watch_seconds}s "
                       f"(retención {retention_min_pct}-{retention_max_pct}%)")
-                self.short_sleep(watch_seconds)
+                if total_seconds > self._UMBRAL_MIDROLL_SEGUNDOS:
+                    self._reproducir_con_manejo_anuncios(watch_seconds, detener_flag)
+                else:
+                    self.short_sleep(watch_seconds)
                 minutos_calentamiento -= watch_seconds
 
                 # Volver a inicio para el siguiente video
@@ -1514,7 +1540,11 @@ class YouTubeAutomator:
 
                     print(f"▶️ [{self.device_id}] Retencion {retention_min_pct}-{retention_max_pct}%: "
                           f"viendo {watch_seconds}s de {total_seconds}s...")
-                    time.sleep(watch_seconds)
+                    if total_seconds > self._UMBRAL_MIDROLL_SEGUNDOS:
+                        # Video largo: poll continuo para omitir anuncios mid-roll
+                        self._reproducir_con_manejo_anuncios(watch_seconds, detener_flag)
+                    else:
+                        time.sleep(watch_seconds)
                     print(f"✅ [{self.device_id}] Reproducción del video completada ({watch_seconds}s)")
 
                     # Satisfaccion seleccionada al iniciar el flujo (determinista)
@@ -1599,7 +1629,10 @@ class YouTubeAutomator:
                                 print(f"[{self.device_id}] Duración no detectada, viendo {watch_seconds}s")
 
                             # Retencion con el video reproduciendose (no se pausa)
-                            time.sleep(watch_seconds)
+                            if total_seconds > self._UMBRAL_MIDROLL_SEGUNDOS:
+                                self._reproducir_con_manejo_anuncios(watch_seconds, detener_flag)
+                            else:
+                                time.sleep(watch_seconds)
                             tiempo_total_reproducido += watch_seconds
 
                             # Mostrar controles para detectar el boton "Siguiente video"
