@@ -7,6 +7,7 @@ from collections import deque
 from typing import Optional, List
 from dotenv import load_dotenv
 import asyncio
+import re
 
 # Cargar variables de entorno
 load_dotenv()
@@ -300,7 +301,12 @@ class YouTubeAutomator:
     def _buscar_youtube_en_chrome(self) -> bool:
         """Busca 'youtube' en la barra de Chrome y click en el resultado para abrir la app nativa."""
         import re
+        # Chrome puede abrir en dos estados:
+        #  - NTP (nueva pestaña): la barra es search_box_text
+        #  - página cargada: la barra es url_bar
         bar = self.device(resourceId="com.android.chrome:id/url_bar")
+        if not bar.exists:
+            bar = self.device(resourceId="com.android.chrome:id/search_box_text")
         if not bar.exists:
             print(f"❌ [{self.device_id}] Barra de direcciones de Chrome no encontrada")
             return False
@@ -665,36 +671,125 @@ class YouTubeAutomator:
         print(f"❌ [{self.device_id}] Elemento no encontrado después de {max_swipes} swipes")
         return False
 
-    def _hay_anuncio(self) -> bool:
-        """Detecta si hay un anuncio en reproduccion."""
-        return (
-            self.resource_exists("com.google.android.youtube:id/ad_progress_text")
-            or self.element_exists('//*[contains(@content-desc, "Anuncio")]')
-            or self.element_exists('//*[contains(@text, "Patrocinado")]')
+    _UNIDADES_TIEMPO = {
+        'hora': 3600, 'horas': 3600,
+        'minuto': 60, 'minutos': 60,
+        'segundo': 1, 'segundos': 1,
+        'hour': 3600, 'hours': 3600,
+        'minute': 60, 'minutes': 60,
+        'second': 1, 'seconds': 1,
+    }
+
+    def _tiempo_a_segundos(self, texto: str) -> int:
+        """Convierte 'X horas Y minutos Z segundos' (ES/EN) a segundos totales."""
+        total = 0
+        for m in re.finditer(
+                r'(\d+)\s*(hora|horas|minuto|minutos|segundo|segundos|hour|hours|minute|minutes|second|seconds)',
+                (texto or '').lower()):
+            total += int(m.group(1)) * self._UNIDADES_TIEMPO[m.group(2)]
+        return total
+
+    def _extraer_tiempo_seekbar(self, xml: str):
+        """Extrae (posicion_actual, duracion_total) del content-desc del SeekBar de YouTube.
+
+        YouTube expone la duracion SIEMPRE en el SeekBar, con o sin controles visibles:
+          content-desc="3 minutos 20 segundos de 13 minutos 51 segundos"
+        (los resource-id time_bar_total_time / time_bar_current_time SOLO existen
+        mientras los controles estan visibles, por eso no sirven como fuente fiable).
+        """
+        m = re.search(r'<node[^>]*class="android.widget.SeekBar"[^>]*/?>', xml)
+        if not m:
+            return 0, 0
+        cd = re.search(r'content-desc="([^"]*)"', m.group(0))
+        if not cd:
+            return 0, 0
+        partes = re.split(r'\s+de\s+|\s+of\s+', cd.group(1), maxsplit=1)
+        actual = self._tiempo_a_segundos(partes[0])
+        total = self._tiempo_a_segundos(partes[1]) if len(partes) == 2 else 0
+        return actual, total
+
+    def _extraer_total_time_bar(self, xml: str) -> int:
+        """Fallback: lee ' / 13:52' del time_bar_total_time (solo existe con controles visibles)."""
+        m = re.search(r'<node[^>]*resource-id="com.google.android.youtube:id/time_bar_total_time"[^>]*/?>', xml)
+        if not m:
+            return 0
+        txt = re.search(r'text="([^"]*)"', m.group(0))
+        if not txt:
+            return 0
+        return self.parse_duration_to_seconds(txt.group(1))
+
+    def _estado_reproduccion(self) -> dict:
+        """Un solo dump de jerarquia con todo lo necesario: anuncio, boton de saltar y duracion.
+
+        Reemplaza los multiples dump_hierarchy() (resource_exists + element_exists) que
+        hacian la deteccion de anuncios excesivamente lenta (cada .exists hace un dump).
+        """
+        xml = self.device.dump_hierarchy()
+        hay_anuncio = (
+            'com.google.android.youtube:id/ad_progress_text' in xml
+            or 'ME GUSTA EL ANUNCIO' in xml
+            or 'COMPARTIR ANUNCIO' in xml
+            or bool(re.search(r'text="[^"]*Patrocinado[^"]*"', xml))
         )
+        skip_center = None
+        for m in re.finditer(r'<node[^>]*/?>', xml):
+            s = m.group(0)
+            cd = re.search(r'content-desc="([^"]*)"', s)
+            b = re.search(r'bounds="([^"]*)"', s)
+            cv = cd.group(1) if cd else ''
+            if b and ('Saltar' in cv or 'Omitir' in cv or 'Skip' in cv):
+                x1, y1, x2, y2 = [int(v) for v in re.findall(r'\d+', b.group(1))]
+                skip_center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                break
+        actual, total = self._extraer_tiempo_seekbar(xml)
+        if total <= 0:
+            total = self._extraer_total_time_bar(xml)
+        return {'hay_anuncio': hay_anuncio, 'skip': skip_center, 'actual': actual, 'total': total}
+
+    def _hay_anuncio(self) -> bool:
+        """Detecta si hay un anuncio en reproduccion (un solo dump)."""
+        return self._estado_reproduccion()['hay_anuncio']
+
+    def _obtener_duracion_video(self, intentos: int = 12) -> int:
+        """Lee la duracion total del video desde el SeekBar SIN tocar el reproductor.
+
+        Tocar el reproductor (watch_player) alterna play/pausa y dejaba el video pausado,
+        por eso la duracion se lee directo del SeekBar, que siempre expone 'X de Y'.
+        Durante un anuncio el SeekBar muestra la duracion del ANUNCIO, no del video, asi
+        que se valida que no haya anuncio activo y se confirma con un segundo dump para
+        no leer justo cuando arranca un anuncio consecutivo.
+        """
+        for _ in range(intentos):
+            estado = self._estado_reproduccion()
+            if estado['hay_anuncio']:
+                self.saltar_anuncio()
+                continue
+            if estado['total'] > 0:
+                self.short_sleep(1.5)
+                estado2 = self._estado_reproduccion()
+                if estado2['hay_anuncio']:
+                    self.saltar_anuncio()
+                    continue
+                return estado2['total'] if estado2['total'] > 0 else estado['total']
+            self.short_sleep(1.0)
+        return 0
 
     def saltar_anuncio(self):
+        """Espera a que no haya anuncio, saltandolo en cuanto aparece el boton.
+
+        Polling rapido (un solo dump por iteracion) en vez de los 5+ dumps y sleeps
+        largos que demoraban la deteccion. Maneja varios anuncios consecutivos.
         """
-        Espera a que aparezca el boton de saltar anuncio y lo clickea.
-        Maneja: 'Saltar anuncio' / 'Omitir anuncio' / 'Skip ad' (content-desc o text).
-        """
-        skip_xpaths = [
-            '//*[contains(@content-desc, "Saltar")]',
-            '//*[contains(@content-desc, "Omitir")]',
-            '//*[contains(@content-desc, "Skip")]',
-            '//*[contains(@text, "Saltar")]',
-            '//*[contains(@text, "Omitir")]',
-        ]
-        for _ in range(6):  # hasta ~30s
-            for xp in skip_xpaths:
-                if self.element_exists(xp):
-                    if self.click_element(xp):
-                        print(f"✅ [{self.device_id}] Anuncio saltado")
-                        self.random_sleep(2, 4)
-                        return
-            if not self._hay_anuncio():
+        for _ in range(45):  # hasta ~90s cubriendo varios anuncios seguidos
+            estado = self._estado_reproduccion()
+            if not estado['hay_anuncio']:
                 return  # no hay anuncio presente
-            self.random_sleep(4, 6)
+            if estado['skip']:
+                self.device.click(*estado['skip'])
+                print(f"✅ [{self.device_id}] Anuncio saltado")
+                self.short_sleep(1.5)
+            else:
+                self.short_sleep(1.0)  # anuncio sin boton de saltar aun
 
     def verificar_es_short(self) -> bool:
         header_text = self.get_element_text(xpath=None,
@@ -981,15 +1076,8 @@ class YouTubeAutomator:
                 self.random_sleep(3, 6)
                 self.saltar_anuncio()
 
-                # Retencion porcentual de la duracion del video
-                total_seconds = 0
-                video_player_xpath = '//*[@content-desc="Reproductor de video"]'
-                if self.element_exists(video_player_xpath):
-                    self.click_element(video_player_xpath)
-                    self.short_sleep(0.5)
-                duration_text = self.get_element_text(resource_id="com.google.android.youtube:id/time_bar_total_time")
-                if duration_text:
-                    total_seconds = self.parse_duration_to_seconds(duration_text)
+                # Retencion porcentual de la duracion del video (leida del SeekBar, sin pausar)
+                total_seconds = self._obtener_duracion_video()
 
                 if total_seconds > 0:
                     watch_seconds = self.calcular_tiempo_retencion(total_seconds, retention_min_pct, retention_max_pct)
@@ -1414,16 +1502,8 @@ class YouTubeAutomator:
                 else:
                     self.saltar_anuncio()
 
-                    # Leer duracion total del video (tocar player para mostrar controles)
-                    total_seconds = 0
-                    video_player_xpath = '//*[@content-desc="Reproductor de video"]'
-                    if self.element_exists(video_player_xpath):
-                        self.click_element(video_player_xpath)
-                        self.short_sleep(0.5)
-                    duration_resource_id = "com.google.android.youtube:id/time_bar_total_time"
-                    duration_text = self.get_element_text(resource_id=duration_resource_id)
-                    if duration_text:
-                        total_seconds = self.parse_duration_to_seconds(duration_text)
+                    # Leer duracion total del video desde el SeekBar (sin tocar el reproductor)
+                    total_seconds = self._obtener_duracion_video()
 
                     # Retencion porcentual de la duracion
                     if total_seconds > 0:
@@ -1507,8 +1587,24 @@ class YouTubeAutomator:
                         if self.element_exists(video_player_xpath):
                             print(f"[{self.device_id}] Video cargado correctamente")
 
+                            # Leer duracion SIN pausar (SeekBar) antes de tocar el reproductor
+                            total_seconds = self._obtener_duracion_video()
+
+                            if total_seconds > 0:
+                                watch_seconds = self.calcular_tiempo_retencion(total_seconds, retention_min_pct, retention_max_pct)
+                                print(f"[{self.device_id}] Video de {total_seconds}s, viendo {watch_seconds}s "
+                                      f"(retención {retention_min_pct}-{retention_max_pct}%)")
+                            else:
+                                watch_seconds = random.randint(45, 120)
+                                print(f"[{self.device_id}] Duración no detectada, viendo {watch_seconds}s")
+
+                            # Retencion con el video reproduciendose (no se pausa)
+                            time.sleep(watch_seconds)
+                            tiempo_total_reproducido += watch_seconds
+
+                            # Mostrar controles para detectar el boton "Siguiente video"
                             self.click_element(video_player_xpath)
-                            self.short_sleep(0.5)
+                            self.short_sleep(0.8)
 
                             # --- VALIDACIÓN DE FIN DE PLAYLIST ---
                             # Si el botón no existe o no está habilitado (enabled=False), es el fin.
@@ -1523,28 +1619,9 @@ class YouTubeAutomator:
                                 es_ultimo = False
                             # -------------------------------------
 
-                            duration_resource_id = "com.google.android.youtube:id/time_bar_total_time"
-                            duration_text = self.get_element_text(resource_id=duration_resource_id)
-
-                            if duration_text:
-                                total_seconds = self.parse_duration_to_seconds(duration_text)
-                                if total_seconds > 0:
-                                    watch_seconds = self.calcular_tiempo_retencion(total_seconds, retention_min_pct, retention_max_pct)
-                                    print(f"[{self.device_id}] Video de {total_seconds}s, viendo {watch_seconds}s "
-                                          f"(retención {retention_min_pct}-{retention_max_pct}%)")
-                                    time.sleep(watch_seconds)
-                                    tiempo_total_reproducido += watch_seconds
-                            else:
-                                watch_seconds = random.randint(45, 120)
-                                print(f"[{self.device_id}] Duración no detectada, viendo {watch_seconds}s")
-                                time.sleep(watch_seconds)
-                                tiempo_total_reproducido += watch_seconds
-
                             if es_ultimo:
                                 continuar_playlist = False
                             else:
-                                self.click_element(video_player_xpath)
-                                self.short_sleep(0.5)
                                 if not self.click_element(next_video_xpath):
                                     continuar_playlist = False
                                 print(f"[{self.device_id}] Siguiente video abierto")
