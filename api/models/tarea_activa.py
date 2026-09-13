@@ -18,6 +18,7 @@ class TareaActiva(BaseModel):
     dispositivos_ids: List[str]
     metricas: Metricas
     config: Dict[str, Any]  # Configuración original de la tarea
+    detalle_metricas: List[Dict[str, Any]] = []  # Retenciones / videos de playlist por dispositivo
     fecha_inicio: datetime
     fecha_fin: Optional[datetime] = None
     
@@ -69,6 +70,10 @@ class TareaActiva(BaseModel):
         """
         self.estado = "completada" if exito else "fallida"
         self.fecha_fin = datetime.now()
+    
+    def agregar_detalle(self, detalle: dict):
+        """Agrega un registro de detalle (retención/video) a la tarea."""
+        self.detalle_metricas.append(detalle)
     
     def obtener_progreso(self) -> float:
         """

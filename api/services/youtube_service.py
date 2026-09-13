@@ -60,17 +60,21 @@ class YoutubeService:
         dispositivo_id: str,
         detener_flag: threading.Event,
         worker,
-        *worker_args
+        *worker_args,
+        delay_seconds: Optional[float] = None
     ) -> threading.Thread:
         """
         Envuelve la ejecución de un worker para asegurar liberación de flags y finalización de tarea.
+
+        delay_seconds: si se indica, el worker espera ese tiempo exacto antes de arrancar
+        (útil para escalonar dispositivos). Si es None, usa un jitter corto aleatorio.
         """
         tareas_service.registrar_flag(tarea_id, dispositivo_id, detener_flag)
 
         def runner():
             exito_general = False
             try:
-                jitter = random.uniform(1.5, 6.0)
+                jitter = delay_seconds if delay_seconds is not None else random.uniform(1.5, 6.0)
                 if detener_flag.wait(jitter):
                     return
                 resultado = worker(*worker_args)
@@ -782,6 +786,7 @@ class YoutubeService:
         Ejecuta reproducciones (retencion) en YouTube.
         """
         try:
+            delay_acumulado = 0.0
             for dispositivo_id in dispositivos_ids:
                 try:
                     dispositivo_service.actualizar_estado(dispositivo_id, DispositivoEstado.TRABAJANDO)
@@ -801,8 +806,11 @@ class YoutubeService:
                         hacer_compartir,
                         comentarios,
                         detener_flag,
-                        tarea_id
+                        tarea_id,
+                        delay_seconds=delay_acumulado
                     )
+                    # Escalonar 1-2 min entre dispositivos para que no entren todos a la vez
+                    delay_acumulado += random.uniform(60, 120)
                 except Exception as device_error:
                     print(f"[YouTube Views] Error preparando dispositivo {dispositivo_id}: {device_error}")
                     tareas_service.liberar_flag(tarea_id, dispositivo_id)
@@ -884,6 +892,10 @@ class YoutubeService:
                 hacer_compartir=hacer_compartir,
                 comentarios=comentarios
             )
+            # Reportar metricas de retencion al frontend
+            detalles = [{**d, "dispositivo_id": dispositivo_id} for d in automator.reproducciones_detalle]
+            if detalles:
+                tareas_service.agregar_detalle_metricas(tarea_id, detalles)
             if sesiones > 0:
                 tareas_service.incrementar_completados(tarea_id, incremento=sesiones)
                 dispositivo_service.actualizar_estado(dispositivo_id, DispositivoEstado.INACTIVO)
@@ -911,6 +923,7 @@ class YoutubeService:
         Ejecuta reproducción de playlist en YouTube.
         """
         try:
+            delay_acumulado = 0.0
             for dispositivo_id in dispositivos_ids:
                 try:
                     dispositivo_service.actualizar_estado(dispositivo_id, DispositivoEstado.TRABAJANDO)
@@ -926,8 +939,11 @@ class YoutubeService:
                         retention_max_pct,
                         cambiar_cuentas,
                         detener_flag,
-                        tarea_id
+                        tarea_id,
+                        delay_seconds=delay_acumulado
                     )
+                    # Escalonar 1-2 min entre dispositivos para que no entren todos a la vez
+                    delay_acumulado += random.uniform(60, 120)
                 except Exception as device_error:
                     print(f"[YouTube Playlist] Error preparando dispositivo {dispositivo_id}: {device_error}")
                     tareas_service.liberar_flag(tarea_id, dispositivo_id)
@@ -992,6 +1008,10 @@ class YoutubeService:
                 retention_min_pct=retention_min_pct,
                 retention_max_pct=retention_max_pct
             )
+            # Reportar videos reproducidos + retencion al frontend
+            detalles = [{**d, "dispositivo_id": dispositivo_id} for d in automator.reproducciones_detalle]
+            if detalles:
+                tareas_service.agregar_detalle_metricas(tarea_id, detalles)
 
             if completados and completados > 0:
                 tareas_service.incrementar_completados(tarea_id, incremento=completados)

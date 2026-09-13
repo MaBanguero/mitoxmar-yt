@@ -24,6 +24,14 @@ export type TareaEstado =
   | "completada"
   | "fallida";
 
+export interface DetalleMetrica {
+  tipo: "retencion" | "playlist_video";
+  dispositivo_id?: string;
+  duracion_s?: number;
+  titulo?: string;
+  retencion_pct?: number;
+}
+
 export interface TareaActiva {
   id: string;
   tipo: string;
@@ -31,6 +39,7 @@ export interface TareaActiva {
   dispositivos_ids: string[];
   metricas: Metricas;
   config: Record<string, unknown>;
+  detalle_metricas: DetalleMetrica[];
   fecha_inicio: string;
   fecha_fin: string | null;
 }

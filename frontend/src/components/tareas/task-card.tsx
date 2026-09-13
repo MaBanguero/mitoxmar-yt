@@ -31,6 +31,13 @@ export function TaskCard({ tarea }: { tarea: TareaActiva }) {
   const pct = total > 0 ? Math.min(100, Math.round((hechos / total) * 100)) : 0;
   const activa = ["iniciando", "ejecutando", "deteniendo"].includes(tarea.estado);
 
+  const detalle = tarea.detalle_metricas ?? [];
+  const retenciones = detalle
+    .filter((d) => d.tipo === "retencion" && typeof d.retencion_pct === "number")
+    .map((d) => d.retencion_pct as number);
+  const videos = detalle.filter((d) => d.tipo === "playlist_video");
+  const hayDetalle = retenciones.length > 0 || videos.length > 0;
+
   const cancelar = async () => {
     setCancelling(true);
     try {
@@ -93,6 +100,52 @@ export function TaskCard({ tarea }: { tarea: TareaActiva }) {
           </span>
         </div>
       </div>
+
+      {/* Métricas de detalle: retención (video) o videos reproducidos (playlist) */}
+      {hayDetalle && (
+        <div className="mt-3 border-t border-line pt-3">
+          {retenciones.length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+                Retención
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {retenciones.map((p, i) => (
+                  <span
+                    key={i}
+                    className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-ink-2"
+                  >
+                    {p}%
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {videos.length > 0 && (
+            <div className={retenciones.length > 0 ? "mt-3" : ""}>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+                Videos reproducidos ({videos.length})
+              </p>
+              <ul className="mt-1.5 space-y-1">
+                {videos.map((v, i) => (
+                  <li
+                    key={i}
+                    className="flex items-start justify-between gap-2 text-[11px]"
+                  >
+                    <span className="min-w-0 truncate text-ink-2">
+                      {v.titulo ?? "Sin título"}
+                    </span>
+                    <span className="shrink-0 font-semibold text-ink">
+                      {v.retencion_pct ?? 0}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

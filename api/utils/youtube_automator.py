@@ -46,6 +46,10 @@ class YouTubeAutomator:
         self.comentarios_asignar: List[str] = []
         self.comentario_idx = 0
 
+        # Detalle de reproducciones de esta sesion (retencion por video/playlist)
+        # para reportar metricas al frontend.
+        self.reproducciones_detalle: List[dict] = []
+
         # Leer número de cuentas desde variable de entorno (default: 5)
         self.cuentas_por_dispositivo = int(os.getenv('CUENTAS_POR_DISPOSITIVO', '5'))
         print(f"⚙️ [{self.device_id}] Configuración: {self.cuentas_por_dispositivo} cuentas por dispositivo | cambiar_cuentas={self.cambiar_cuentas}")
@@ -229,6 +233,10 @@ class YouTubeAutomator:
             if not self._buscar_en_app_nativa(termino):
                 raise Exception("No se pudo buscar el video en la app nativa")
 
+            # 3b. Si es una lista de reproduccion, aplicar el filtro 'Listas' para que aparezca
+            if self._es_playlist(link_link):
+                self._aplicar_filtro_lista()
+
             # 4. Click en el primer resultado
             if not self._click_primer_resultado():
                 raise Exception("No se encontro un resultado para clickear")
@@ -271,6 +279,14 @@ class YouTubeAutomator:
         if m:
             return m.group(2)
         return url
+
+    def _es_playlist(self, url: str) -> bool:
+        """True si la URL es una lista de reproduccion (tiene list= y no es un video suelto)."""
+        import re
+        url = (url or "").strip()
+        tiene_list = bool(re.search(r"[?&]list=[A-Za-z0-9_-]{6,}", url))
+        tiene_v = bool(re.search(r"[?&]v=[A-Za-z0-9_-]{6,}", url))
+        return tiene_list and not tiene_v
 
     def _cuenta_tracking(self) -> str:
         """Clave de cuenta para el tracking. Usa el nombre si se conoce, si no device+posicion."""
@@ -392,13 +408,75 @@ class YouTubeAutomator:
         self.random_sleep(5, 8)
         return True
 
+    def _aplicar_filtro_lista(self) -> bool:
+        """Aplica el filtro 'Listas' en la busqueda nativa para que aparezcan listas de reproduccion.
+
+        Flujo verificado (YouTube 21.x): Más opciones (3 puntos) -> 'Filtros de búsqueda'
+        -> spinner 'Tipo' ('Todo') -> 'Listas' -> 'Aplicar'.
+        """
+        import re
+        # 1. 'Más opciones' (3 puntos) en la esquina superior derecha de la barra de busqueda
+        xml = self.device.dump_hierarchy()
+        target = None
+        for m in re.finditer(r'<node[^>]*/?>', xml):
+            s = m.group(0)
+            cd = re.search(r'content-desc="([^"]*)"', s)
+            b = re.search(r'bounds="([^"]*)"', s)
+            cv = cd.group(1) if cd else ''
+            if cv == 'Más opciones' and b:
+                x1, y1, x2, y2 = [int(v) for v in re.findall(r'\d+', b.group(1))]
+                if y1 < 250 and x1 > 900:
+                    target = ((x1 + x2) // 2, (y1 + y2) // 2)
+                    break
+        if not target:
+            print(f"❌ [{self.device_id}] Boton 'Más opciones' de busqueda no encontrado")
+            return False
+        self.device.click(*target)
+        self.random_sleep(1, 2)
+
+        # 2. 'Filtros de búsqueda'
+        filtros = self.device(text="Filtros de búsqueda")
+        if not filtros.exists:
+            print(f"❌ [{self.device_id}] Opcion 'Filtros de búsqueda' no encontrada")
+            return False
+        filtros.click()
+        self.random_sleep(1, 2)
+
+        # 3. Spinner 'Tipo' (muestra 'Todo')
+        tipo = self.device(resourceId="com.google.android.youtube:id/spinner_dropdown_item", text="Todo")
+        if not tipo.exists:
+            tipo = self.device(resourceId="com.google.android.youtube:id/spinner_dropdown_item")
+        if not tipo.exists:
+            print(f"❌ [{self.device_id}] Spinner 'Tipo' no encontrado")
+            return False
+        tipo.click()
+        self.random_sleep(1, 2)
+
+        # 4. Opcion 'Listas'
+        listas = self.device(text="Listas")
+        if not listas.exists:
+            print(f"❌ [{self.device_id}] Opcion 'Listas' no encontrada")
+            return False
+        listas.click()
+        self.random_sleep(1, 2)
+
+        # 5. 'Aplicar'
+        aplicar = self.device(resourceId="com.google.android.youtube:id/apply")
+        if not aplicar.exists:
+            print(f"❌ [{self.device_id}] Boton 'Aplicar' no encontrado")
+            return False
+        aplicar.click()
+        self.random_sleep(3, 5)
+        print(f"✅ [{self.device_id}] Filtro 'Listas' aplicado")
+        return True
+
     def _click_primer_resultado(self) -> bool:
         """Click en el primer resultado (video 'ver vídeo', Short, o playlist)."""
         import re
         xml = self.device.dump_hierarchy()
         target = None
 
-        for marker in ("ver vídeo", "reproducir Short", "reproducir playlist", "Playlist"):
+        for marker in ("ver vídeo", "reproducir Short", "Lista de reproducción", "reproducir playlist", "Playlist"):
             for m in re.finditer(r"<node[^>]*>", xml):
                 s = m.group(0)
                 cd = re.search(r'content-desc="([^"]*)"', s)
@@ -773,6 +851,26 @@ class YouTubeAutomator:
                 return estado2['total'] if estado2['total'] > 0 else estado['total']
             self.short_sleep(1.0)
         return 0
+
+    def _obtener_titulo_video_actual(self) -> str:
+        """Lee el titulo del video actual via MediaSession (el titulo no esta en el arbol UI)."""
+        try:
+            r = subprocess.run(
+                ['adb', '-P', str(CUSTOM_ADB_PORT), '-s', self.device_id, 'shell', 'dumpsys', 'media_session'],
+                capture_output=True, text=True, timeout=10
+            )
+            out = r.stdout or ""
+            idx = out.find('package=com.google.android.youtube')
+            if idx != -1:
+                m = re.search(r'description=([^\n]*)', out[idx:])
+                if m:
+                    titulo = m.group(1).split(',')[0].strip()
+                    if titulo and titulo.lower() != 'null':
+                        return titulo
+            return ""
+        except Exception as e:
+            print(f"⚠️ [{self.device_id}] Error leyendo titulo via media_session: {e}")
+            return ""
 
     def saltar_anuncio(self):
         """Espera a que no haya anuncio, saltandolo en cuanto aparece el boton.
@@ -1517,6 +1615,9 @@ class YouTubeAutomator:
                 self.open_youtube_link(link_post)
                 self.random_sleep(5, 8)
 
+                pct_retencion = 0
+                total_seconds = 0
+
                 if self.verificar_es_short():
                     # Shorts: se ven casi completos (son cortos)
                     short_duration = random.randint(25, 55)
@@ -1534,9 +1635,11 @@ class YouTubeAutomator:
                     # Retencion porcentual de la duracion
                     if total_seconds > 0:
                         watch_seconds = self.calcular_tiempo_retencion(total_seconds, retention_min_pct, retention_max_pct)
+                        pct_retencion = round(watch_seconds * 100.0 / total_seconds)
                     else:
                         # Duracion no detectada: fallback
                         watch_seconds = random.randint(45, 90)
+                        pct_retencion = 0
 
                     print(f"▶️ [{self.device_id}] Retencion {retention_min_pct}-{retention_max_pct}%: "
                           f"viendo {watch_seconds}s de {total_seconds}s...")
@@ -1551,7 +1654,12 @@ class YouTubeAutomator:
                     self._interaccion_satisfaccion(hacer_like, hacer_comentario, hacer_compartir, detener_flag)
 
                 sesiones_realizadas += 1
-                self._registrar("vista")
+                self._registrar("vista", f"{pct_retencion}%")
+                self.reproducciones_detalle.append({
+                    "tipo": "retencion",
+                    "duracion_s": total_seconds,
+                    "retencion_pct": pct_retencion,
+                })
 
             except Exception as e:
                 print(f"⚠️ [{self.device_id}] Error en proceso de views: {e}")
@@ -1620,13 +1728,27 @@ class YouTubeAutomator:
                             # Leer duracion SIN pausar (SeekBar) antes de tocar el reproductor
                             total_seconds = self._obtener_duracion_video()
 
+                            # Registrar titulo + retencion del video actual de la lista
+                            self.short_sleep(1.5)
+                            titulo = self._obtener_titulo_video_actual()
+
                             if total_seconds > 0:
                                 watch_seconds = self.calcular_tiempo_retencion(total_seconds, retention_min_pct, retention_max_pct)
+                                pct_retencion = round(watch_seconds * 100.0 / total_seconds)
                                 print(f"[{self.device_id}] Video de {total_seconds}s, viendo {watch_seconds}s "
                                       f"(retención {retention_min_pct}-{retention_max_pct}%)")
                             else:
                                 watch_seconds = random.randint(45, 120)
+                                pct_retencion = 0
                                 print(f"[{self.device_id}] Duración no detectada, viendo {watch_seconds}s")
+
+                            self._registrar("playlist_video", f"{titulo or 'desconocido'}|{pct_retencion}%")
+                            print(f"🎬 [{self.device_id}] Video de lista: '{titulo or 'desconocido'}' — retención {pct_retencion}%")
+                            self.reproducciones_detalle.append({
+                                "tipo": "playlist_video",
+                                "titulo": titulo or "desconocido",
+                                "retencion_pct": pct_retencion,
+                            })
 
                             # Retencion con el video reproduciendose (no se pausa)
                             if total_seconds > self._UMBRAL_MIDROLL_SEGUNDOS:

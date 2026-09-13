@@ -211,6 +211,23 @@ class TareasService:
             if tarea:
                 tarea.actualizar_metrica("exitosos", incremento)
 
+    def agregar_detalle_metricas(self, tarea_id: str, detalles: List[dict]):
+        """Agrega registros de detalle (retenciones/videos reproducidos) a una tarea desde threads."""
+        async def _update():
+            async with self._lock:
+                tarea = self._tareas.get(tarea_id)
+                if tarea:
+                    for d in detalles:
+                        tarea.agregar_detalle(d)
+
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(_update(), self._loop)
+        else:
+            tarea = self._tareas.get(tarea_id)
+            if tarea:
+                for d in detalles:
+                    tarea.agregar_detalle(d)
+
     def registrar_flag(self, tarea_id: str, dispositivo_id: str, flag: threading.Event):
         """Asocia el flag de detener de un dispositivo a su tarea."""
         with self._thread_lock:
