@@ -1208,6 +1208,93 @@ class YouTubeAutomator:
         segundos = int(duracion_segundos * pct / 100.0)
         return max(5, segundos)
 
+    def _interaccion_satisfaccion(self, detener_flag: Optional[threading.Event] = None):
+        """
+        Interaccion probabilistica en el video ACTUAL (ya abierto) para simular
+        satisfaccion, sin parecer bot: like ~20%, comentario ~5%, compartir ~3%.
+        """
+        if detener_flag and detener_flag.is_set():
+            return
+        try:
+            # Mostrar controles del reproductor si estan ocultos
+            video_player_xpath = '//*[@content-desc="Reproductor de video"]'
+            if self.element_exists(video_player_xpath):
+                self.click_element(video_player_xpath)
+                self.short_sleep(0.8)
+
+            # Like ~20%
+            if random.random() < 0.20:
+                if self._like_video_actual():
+                    self.random_sleep(2, 4)
+
+            # Comentario ~5%
+            if random.random() < 0.05:
+                if self._comentar_video_actual():
+                    self.random_sleep(2, 4)
+
+            # Compartir ~3%
+            if random.random() < 0.03:
+                if self._compartir_video_actual():
+                    self.random_sleep(2, 4)
+        except Exception as e:
+            print(f"⚠️ [{self.device_id}] Error en interaccion satisfaccion: {e}")
+
+    def _like_video_actual(self) -> bool:
+        """Da like al video actual (excluye el boton 'No me gusta')."""
+        like_xpath = '//*[contains(@content-desc, "Me gusta") and not(contains(@content-desc, "No me gusta"))]'
+        if self.element_exists(like_xpath):
+            if self.click_element(like_xpath):
+                print(f"👍 [{self.device_id}] Like realizado (satisfacción)")
+                return True
+        return False
+
+    def _comentar_video_actual(self) -> bool:
+        """Publica un comentario corto generico en el video actual."""
+        comentarios = [
+            "Buen video 👍", "Muy bueno", "🔥🔥", "Excelente contenido",
+            "Gracias por compartir", "👏👏", "Muy útil", "Gran video",
+        ]
+        try:
+            comment_xpath = '//*[contains(@content-desc, "Comentario") or contains(@content-desc, "comentario")]'
+            if not self.element_exists(comment_xpath):
+                return False
+            self.click_element(comment_xpath)
+            self.random_sleep(2, 4)
+
+            input_field = self.device(className="android.widget.EditText")
+            if not input_field.exists:
+                self.press_back()
+                return False
+            input_field.click()
+            self.short_sleep(1)
+
+            comentario = random.choice(comentarios)
+            self.device.send_keys(comentario, clear=True)
+            self.short_sleep(1)
+            self.device.press("enter")
+            print(f"💬 [{self.device_id}] Comentario publicado (satisfacción): {comentario}")
+            self.random_sleep(1, 2)
+            self.press_back()
+            return True
+        except Exception as e:
+            print(f"⚠️ [{self.device_id}] Error comentando: {e}")
+            return False
+
+    def _compartir_video_actual(self) -> bool:
+        """Copia el enlace del video actual (accion de compartir)."""
+        share_xpath = '//*[contains(@content-desc, "Compartir")]'
+        copy_xpath = '//*[@text="Copiar enlace"]'
+        if self.element_exists(share_xpath) and self.click_element(share_xpath):
+            self.random_sleep(2, 4)
+            if self.element_exists(copy_xpath):
+                if self.click_element(copy_xpath):
+                    print(f"🔗 [{self.device_id}] Enlace copiado (satisfacción)")
+                    self.random_sleep(1, 2)
+                    self.press_back()
+                    return True
+            self.press_back()
+        return False
+
     def proceso_views(
             self,
             link_post: str,
@@ -1280,6 +1367,9 @@ class YouTubeAutomator:
                           f"viendo {watch_seconds}s de {total_seconds}s...")
                     time.sleep(watch_seconds)
                     print(f"✅ [{self.device_id}] Reproducción del video completada ({watch_seconds}s)")
+
+                    # Fase 6: satisfaccion probabilistica (like/comentario/compartir)
+                    self._interaccion_satisfaccion(detener_flag)
 
                 sesiones_realizadas += 1
 
