@@ -772,6 +772,9 @@ class YoutubeService:
         retention_min_pct: float,
         retention_max_pct: float,
         cambiar_cuentas: bool,
+        hacer_like: bool,
+        hacer_comentario: bool,
+        hacer_compartir: bool,
         tarea_id: str
     ) -> dict:
         """
@@ -792,6 +795,9 @@ class YoutubeService:
                         retention_min_pct,
                         retention_max_pct,
                         cambiar_cuentas,
+                        hacer_like,
+                        hacer_comentario,
+                        hacer_compartir,
                         detener_flag,
                         tarea_id
                     )
@@ -818,6 +824,9 @@ class YoutubeService:
         retention_min_pct: float,
         retention_max_pct: float,
         cambiar_cuentas: bool,
+        hacer_like: bool,
+        hacer_comentario: bool,
+        hacer_compartir: bool,
         detener_flag: threading.Event,
         tarea_id: str
     ):
@@ -832,6 +841,9 @@ class YoutubeService:
                 retention_min_pct,
                 retention_max_pct,
                 cambiar_cuentas,
+                hacer_like,
+                hacer_comentario,
+                hacer_compartir,
                 detener_flag,
                 tarea_id
             )
@@ -848,6 +860,9 @@ class YoutubeService:
         retention_min_pct: float,
         retention_max_pct: float,
         cambiar_cuentas: bool,
+        hacer_like: bool,
+        hacer_comentario: bool,
+        hacer_compartir: bool,
         detener_flag: threading.Event,
         tarea_id: str
     ):
@@ -858,7 +873,10 @@ class YoutubeService:
                 link_post,
                 detener_flag=detener_flag,
                 retention_min_pct=retention_min_pct,
-                retention_max_pct=retention_max_pct
+                retention_max_pct=retention_max_pct,
+                hacer_like=hacer_like,
+                hacer_comentario=hacer_comentario,
+                hacer_compartir=hacer_compartir
             )
             if sesiones > 0:
                 tareas_service.incrementar_completados(tarea_id, incremento=sesiones)

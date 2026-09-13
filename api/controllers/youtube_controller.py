@@ -362,6 +362,9 @@ async def ejecutar_views(request: dict):
         retention_min_pct = float(request.get('retention_min_pct') or request.get('retention_min') or 30)
         retention_max_pct = float(request.get('retention_max_pct') or request.get('retention_max') or 100)
         cambiar_cuentas = bool(request.get('cambiar_cuentas', True))
+        hacer_like = bool(request.get('hacer_like', False))
+        hacer_comentario = bool(request.get('hacer_comentario', False))
+        hacer_compartir = bool(request.get('hacer_compartir', False))
 
         if not dispositivos_ids:
             raise HTTPException(status_code=400, detail="Debe seleccionar al menos un dispositivo")
@@ -379,6 +382,9 @@ async def ejecutar_views(request: dict):
                 "retention_min_pct": retention_min_pct,
                 "retention_max_pct": retention_max_pct,
                 "cambiar_cuentas": cambiar_cuentas,
+                "hacer_like": hacer_like,
+                "hacer_comentario": hacer_comentario,
+                "hacer_compartir": hacer_compartir,
             },
             total_esperado=len(dispositivos_ids) * len(links)
         )
@@ -391,6 +397,9 @@ async def ejecutar_views(request: dict):
             retention_min_pct,
             retention_max_pct,
             cambiar_cuentas,
+            hacer_like,
+            hacer_comentario,
+            hacer_compartir,
             tarea_id=tarea.id
         )
 

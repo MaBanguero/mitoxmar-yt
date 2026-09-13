@@ -1208,12 +1208,17 @@ class YouTubeAutomator:
         segundos = int(duracion_segundos * pct / 100.0)
         return max(5, segundos)
 
-    def _interaccion_satisfaccion(self, detener_flag: Optional[threading.Event] = None):
+    def _interaccion_satisfaccion(self, hacer_like: bool = False, hacer_comentario: bool = False,
+                                  hacer_compartir: bool = False,
+                                  detener_flag: Optional[threading.Event] = None):
         """
-        Interaccion probabilistica en el video ACTUAL (ya abierto) para simular
-        satisfaccion, sin parecer bot: like ~20%, comentario ~5%, compartir ~3%.
+        Realiza las acciones de satisfaccion SELECCIONADAS (deterministas, no probabilisticas)
+        en el video ACTUAL (ya abierto). El usuario elige al iniciar el flujo si quiere
+        like, comentario y/o compartir.
         """
         if detener_flag and detener_flag.is_set():
+            return
+        if not (hacer_like or hacer_comentario or hacer_compartir):
             return
         try:
             # Mostrar controles del reproductor si estan ocultos
@@ -1222,20 +1227,14 @@ class YouTubeAutomator:
                 self.click_element(video_player_xpath)
                 self.short_sleep(0.8)
 
-            # Like ~20%
-            if random.random() < 0.20:
-                if self._like_video_actual():
-                    self.random_sleep(2, 4)
+            if hacer_like and self._like_video_actual():
+                self.random_sleep(2, 4)
 
-            # Comentario ~5%
-            if random.random() < 0.05:
-                if self._comentar_video_actual():
-                    self.random_sleep(2, 4)
+            if hacer_comentario and self._comentar_video_actual():
+                self.random_sleep(2, 4)
 
-            # Compartir ~3%
-            if random.random() < 0.03:
-                if self._compartir_video_actual():
-                    self.random_sleep(2, 4)
+            if hacer_compartir and self._compartir_video_actual():
+                self.random_sleep(2, 4)
         except Exception as e:
             print(f"⚠️ [{self.device_id}] Error en interaccion satisfaccion: {e}")
 
@@ -1300,7 +1299,10 @@ class YouTubeAutomator:
             link_post: str,
             detener_flag: Optional[threading.Event] = None,
             retention_min_pct: float = 30,
-            retention_max_pct: float = 100
+            retention_max_pct: float = 100,
+            hacer_like: bool = False,
+            hacer_comentario: bool = False,
+            hacer_compartir: bool = False
     ) -> int:
         """
         Proceso de views (retencion) en YouTube. La retencion varia entre
@@ -1368,8 +1370,8 @@ class YouTubeAutomator:
                     time.sleep(watch_seconds)
                     print(f"✅ [{self.device_id}] Reproducción del video completada ({watch_seconds}s)")
 
-                    # Fase 6: satisfaccion probabilistica (like/comentario/compartir)
-                    self._interaccion_satisfaccion(detener_flag)
+                    # Satisfaccion seleccionada al iniciar el flujo (determinista)
+                    self._interaccion_satisfaccion(hacer_like, hacer_comentario, hacer_compartir, detener_flag)
 
                 sesiones_realizadas += 1
 
