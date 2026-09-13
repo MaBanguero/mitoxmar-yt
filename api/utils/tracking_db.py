@@ -49,14 +49,26 @@ def _init():
 _init()
 
 
-def accion_registrada(cuenta: str, video_id: str, accion: str) -> bool:
-    """True si la accion ya fue registrada para esa cuenta y video."""
+def accion_registrada(cuenta: str, video_id: str, accion: str, valor: str = None) -> bool:
+    """True si la accion (y opcionalmente su valor) ya fue registrada para esa cuenta y video.
+
+    - valor=None: busca por (cuenta, video_id, accion). Útil para like/compartir/suscripcion
+      donde solo importa si ya se ejecutó una vez.
+    - valor dado: busca además por valor. Útil para comentarios, donde una misma cuenta
+      puede publicar varios comentarios distintos sobre el mismo video.
+    """
     with _lock:
         conn = _conn()
-        cur = conn.execute(
-            "SELECT 1 FROM acciones WHERE cuenta=? AND video_id=? AND accion=? LIMIT 1",
-            (cuenta, video_id, accion),
-        )
+        if valor is None:
+            cur = conn.execute(
+                "SELECT 1 FROM acciones WHERE cuenta=? AND video_id=? AND accion=? LIMIT 1",
+                (cuenta, video_id, accion),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT 1 FROM acciones WHERE cuenta=? AND video_id=? AND accion=? AND valor=? LIMIT 1",
+                (cuenta, video_id, accion, valor),
+            )
         r = cur.fetchone() is not None
         conn.close()
         return r
@@ -64,13 +76,24 @@ def accion_registrada(cuenta: str, video_id: str, accion: str) -> bool:
 
 def registrar_accion(cuenta: str, dispositivo_id: str, video_id: str,
                      accion: str, valor: str = None):
-    """Registra una accion ejecutada (idempotente: no duplica)."""
+    """Registra una accion ejecutada (idempotente: no duplica).
+
+    Para acciones con valor (p.ej. comentarios), la deduplicacion considera el valor,
+    de modo que una misma cuenta puede registrar varios comentarios distintos sobre
+    el mismo video.
+    """
     with _lock:
         conn = _conn()
-        ya = conn.execute(
-            "SELECT 1 FROM acciones WHERE cuenta=? AND video_id=? AND accion=? LIMIT 1",
-            (cuenta, video_id, accion),
-        ).fetchone()
+        if valor is None:
+            ya = conn.execute(
+                "SELECT 1 FROM acciones WHERE cuenta=? AND video_id=? AND accion=? LIMIT 1",
+                (cuenta, video_id, accion),
+            ).fetchone()
+        else:
+            ya = conn.execute(
+                "SELECT 1 FROM acciones WHERE cuenta=? AND video_id=? AND accion=? AND valor=? LIMIT 1",
+                (cuenta, video_id, accion, valor),
+            ).fetchone()
         if not ya:
             conn.execute(
                 "INSERT INTO acciones (cuenta, dispositivo_id, video_id, accion, valor, created_at) "

@@ -275,9 +275,9 @@ class YouTubeAutomator:
         """Clave de cuenta para el tracking. Usa el nombre si se conoce, si no device+posicion."""
         return self.cuenta_actual or f"{self.device_id}#{len(self.cuentas_usadas)}"
 
-    def _deberia_ejecutar(self, video_id: str, accion: str) -> bool:
-        """True si la accion no se ha ejecutado aun para esta cuenta y video."""
-        return not tracking_db.accion_registrada(self._cuenta_tracking(), video_id, accion)
+    def _deberia_ejecutar(self, video_id: str, accion: str, valor: str = None) -> bool:
+        """True si la accion (y opcionalmente su valor) no se ha ejecutado aun para esta cuenta y video."""
+        return not tracking_db.accion_registrada(self._cuenta_tracking(), video_id, accion, valor)
 
     def _registrar(self, accion: str, valor: str = None):
         """Registra una accion en la DB de tracking para la cuenta y video actuales."""
@@ -1179,31 +1179,39 @@ class YouTubeAutomator:
                 self.open_youtube_link(link_post)
                 self.random_sleep(5, 8)
 
-                share_button_xpath = '//*[contains(@content-desc, "Compartir")]'
-                copy_link_xpath = '//*[@text="Copiar enlace"]'
+                video_id = self.video_id_actual or ""
 
-                if not self.verificar_es_short():
-                    self.saltar_anuncio()
-
-                if self.element_exists(share_button_xpath) and self.click_element(share_button_xpath):
-                    self.random_sleep(2, 4)
-
-                    if self.element_exists(copy_link_xpath):
-                        if self.click_element(copy_link_xpath):
-                            compartida_exitosa = True
-                            print(f"✅ [{self.device_id}] Enlace copiado al portapapeles")
-                    else:
-                        print(
-                            f"⚠️ [{self.device_id}] Opción de copiar enlace no encontrada, intentando coordenadas fijas")
-                        try:
-                            self.device.click(191, 1940)
-                            compartida_exitosa = True
-                            print(f"✅ [{self.device_id}] Compartida forzada mediante coordenadas")
-                        except Exception as coord_err:
-                            print(
-                                f"❌ [{self.device_id}] No se pudo completar la compartida por coordenadas: {coord_err}")
+                if not self._deberia_ejecutar(video_id, "compartir"):
+                    print(f"ℹ️ [{self.device_id}] Compartida ya registrada para esta cuenta/video, saltando")
+                    compartida_exitosa = True
                 else:
-                    print(f"❌ [{self.device_id}] Botón de compartir no encontrado")
+                    share_button_xpath = '//*[contains(@content-desc, "Compartir")]'
+                    copy_link_xpath = '//*[@text="Copiar enlace"]'
+
+                    if not self.verificar_es_short():
+                        self.saltar_anuncio()
+
+                    if self.element_exists(share_button_xpath) and self.click_element(share_button_xpath):
+                        self.random_sleep(2, 4)
+
+                        if self.element_exists(copy_link_xpath):
+                            if self.click_element(copy_link_xpath):
+                                compartida_exitosa = True
+                                self._registrar("compartir")
+                                print(f"✅ [{self.device_id}] Enlace copiado al portapapeles")
+                        else:
+                            print(
+                                f"⚠️ [{self.device_id}] Opción de copiar enlace no encontrada, intentando coordenadas fijas")
+                            try:
+                                self.device.click(191, 1940)
+                                compartida_exitosa = True
+                                self._registrar("compartir")
+                                print(f"✅ [{self.device_id}] Compartida forzada mediante coordenadas")
+                            except Exception as coord_err:
+                                print(
+                                    f"❌ [{self.device_id}] No se pudo completar la compartida por coordenadas: {coord_err}")
+                    else:
+                        print(f"❌ [{self.device_id}] Botón de compartir no encontrado")
 
                 if compartida_exitosa:
                     self.random_sleep(3, 6)
@@ -1860,10 +1868,14 @@ class YouTubeAutomator:
                 self.device.send_keys(comentario_actual, clear=True)
                 self.short_sleep(1)
 
-                if self.element_exists(post_button_xpath) and self.click_element(post_button_xpath):
+                if not self._deberia_ejecutar(self.video_id_actual or "", "comentario", valor=comentario_actual):
+                    print(f"ℹ️ [{self.device_id}] Comentario ya registrado para esta cuenta/video, saltando")
+                    comentarios_pendientes.popleft()
+                elif self.element_exists(post_button_xpath) and self.click_element(post_button_xpath):
                     publicados += 1
                     intento_publicado = True
                     comentarios_pendientes.popleft()
+                    self._registrar("comentario", comentario_actual)
                     print(f"[YT][{self.device_id}] Comentario publicado ({publicados} total)")
                 else:
                     print(f"[YT][{self.device_id}] Botón de publicar no encontrado")
